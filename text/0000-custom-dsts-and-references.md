@@ -105,43 +105,6 @@ impl CStr {
 }
 ```
 
-### SizeWrapper
-
-To make creating custom KnownSize types safe, the standard library can have a `SizeWrapper` struct. 
-
-```rust
-
-struct SizeWrapper<T: ?Sized> {
-    size: usize,
-    data: T,
-}
-
-
-unsafe impl<T: ?Sized> KnownSize for SizeWrapper<T> {
-    fn get_size(&self) -> usize {
-        self.size
-    }
-}
-
-//More impls, such as Deref
-```
-
-Then user code can do something like
-
-```rust
-
-struct MyDST {
-    data: SizeWrapper<str>,
-}
-// MyDST automatically derives KnownSize
-
-impl MyDST {
-    fn foo(&self) {
-        println!("MyDST has a message for you: {}", self.data); 
-    }
-}
-```
-
 # Custom reference traits
 These are traits desinged for making _reference-like types_. Reference-like types are just regular types that "behave" like references. They usually look something like this:
 ```rust
@@ -153,13 +116,13 @@ struct CustomReference<'a> {
 ```
 When using reference-like types, they should be generally moved, instead of borrowed. For example
 ```rust
-fn do_something(ref: &u8)
+fn do_something(ref: &u8){...}
 // Would be written as
-fn do_something(ref: CustomReference)
+fn do_something(ref: CustomReference) {...}
 // And this
-fn do_something(ref: &CustomReference)
+fn do_something(ref: &CustomReference) {...}
 //Is a bit like doing
-fn do_something(ref: &&u8)
+fn do_something(ref: &&u8) {...}
 ```
 The reason for this is explained [here](https://github.com/gretingz/rfcs/new/master/text#). 
 
@@ -529,16 +492,6 @@ impl<'a> BitSliceMut<'a> {
 }
 ```
 
-Explain the proposal as if it was already included in the language and you were teaching it to another Rust programmer. That generally means:
-
-- Introducing new named concepts.
-- Explaining the feature largely in terms of examples.
-- Explaining how Rust programmers should *think* about the feature, and how it should impact the way they use Rust. It should explain the impact as concretely as possible.
-- If applicable, provide sample error messages, deprecation warnings, or migration guidance.
-- If applicable, describe the differences between teaching this to existing Rust programmers and new Rust programmers.
-
-For implementation-oriented RFCs (e.g. for compiler internals), this section should focus on how compiler contributors should think about the change, and give examples of its concrete impact. For policy RFCs, this section should provide an example-driven introduction to the policy, and explain its impact in concrete terms.
-
 # Reference-level explanation
 [reference-level-explanation]: #reference-level-explanation
 
@@ -574,8 +527,20 @@ struct Foo {
     wrapper: DynWrapper,
 }
 ```
-If DynWrapper has a stricter alignment than usize, it's not really possible to tell how much padding there is between some_number and wrapper (without a fat pointer).
+If DynWrapper has a stricter alignment than usize, it's not really possible to tell how much padding there is between ```some_number``` and ```wrapper``` (without a fat pointer).
 This would be possible to solve by having wrapper be the first element of the struct. Having two DynWrappers in a struct is not possible.
+
+## Rules for adding reborrows:
+
+The rules should be kept vauge and restrictive to allow for future changes, but here are anyways my naïve set of rules for reborrowing.
+
+Zeroth rule is that no reborrowing should occur if not neccesary.
+
+First rule: A reborrow should be attempted if there is a method that expects a wrong type ("Expected T found U").
+
+Second rule: If a reborrow that was attemped because of the first rule fails because of a lifetime error, the reborrow should be attempted to be replaced by an into_immutable.
+
+Third rule: If a value is moved, and then used again, try to replace the previous move with a reborrow.
 
 ## Auto impls:
 
@@ -650,15 +615,16 @@ impl<'a, T: ?Sized> Reborrow for &'a T {
 [drawbacks]: #drawbacks
 
 - Implementing custom references is very verbose
-- Future improvements to lifetime ergonomics might not be retrofittable
-- Dishtinguishing between references and concrete types gets harder
+- Future improvements to lifetime ergonomics might not be retrofittable. This RFC is also largely designed around NLL.
+- More complexity to the language
+- Potential to abuse Reborrow and ReborrowMut as a makeshift ```Copy``` trait.
 
 # Rationale and alternatives
 [rationale-and-alternatives]: #rationale-and-alternatives
 
 This is an alternative to both #2594 and #2953, so here is a comparison between them:
 
-## Advantages over #2953
+## Advantages over #2594
 - Reference-like types allow more flexibility for metadata. For example a reference-like type can contain a Box, Rc, Arc, Mutex, whatever. 
 - Reference-like types allow more specific rules for references than regular references.
 For example let's say we want to implement a BitSlice that can be shared between threads. Due to the possibility of mutable slices that alias at the byte level,
@@ -668,7 +634,7 @@ If we have only one thread that is writing, we can simply mark ```BitSliceMut```
 - It's possible to make reference-like types with safe rust
 - Reference-like types only require the compiler to add reborrows in various places.
 
-## Disadvantages over #2953
+## Disadvantages over #2594
 - Reference-like types are much more verbose to implement
 - Some types may lose their meaning with regular references. For example say we have the following:
 ```rust
@@ -686,8 +652,9 @@ struct 2DArraySlice {
 And wanted to return a ```Box<2DArray>```.  Box has no way of knowing that it should use 2DArraySlice as the pointer.
 Hence information about the dimensions of 2DArray is lost.
 
-## Advantages/Disadvantages over #2594
-- 
+## Advantages/Disadvantages over #2953
+- Forces library authors to have reference-like types for single elements.
+- Allows library authors to overload the ```& v[i]``` and ```&mut v[i]``` syntax.
 
 ## Why have KnownSize? Can't you use reference-like types for CStr etc?
 
@@ -756,28 +723,38 @@ Reborrow is similar to ReborrowMut. IntoImmutable is used to convert a mutable r
 # Prior art
 [prior-art]: #prior-art
 
-Discuss prior art, both the good and the bad, in relation to this proposal.
-A few examples of what this can include are:
+## DST:
 
-- For language, library, cargo, tools, and compiler proposals: Does this feature exist in other programming languages and what experience have their community had?
-- For community proposals: Is this done by some other community and what were their experiences with it?
-- For other teams: What lessons can we learn from what other communities have done here?
-- Papers: Are there any published papers or great posts that discuss this? If you have some relevant papers to refer to, this can serve as a more detailed theoretical background.
+- [FAMs in C](https://en.wikipedia.org/wiki/Flexible_array_member)
+- [FAMs in C++](https://htmlpreview.github.io/?https://github.com/ThePhD/future_cxx/blob/master/papers/d1039.html) (unfinished proposal)
+- Other RFCs
+  - [mzabaluev's Version](https://github.com/rust-lang/rfcs/pull/709)
+  - [strega-nil's Old Version](https://github.com/rust-lang/rfcs/pull/1524)
+  - [strega-nil's New Version](https://github.com/rust-lang/rfcs/pull/2594)
+  - [japaric's Pre-RFC](https://github.com/japaric/rfcs/blob/unsized2/text/0000-unsized-types.md)
+  - [mikeyhew's Pre-RFC](https://internals.rust-lang.org/t/pre-erfc-lets-fix-dsts/6663)
+  - [MicahChalmer's RFC](https://github.com/rust-lang/rfcs/pull/9)
+  - [nrc's Virtual Structs](https://github.com/rust-lang/rfcs/pull/5)
+  - [Pointer Metadata and VTable](https://github.com/rust-lang/rfcs/pull/2580)
+  - [Syntax of ?Sized](https://github.com/rust-lang/rfcs/pull/490)
 
-This section is intended to encourage you as an author to think about the lessons from other languages, provide readers of your RFC with a fuller picture.
-If there is no prior art, that is fine - your ideas are interesting to us whether they are brand new or if it is an adaptation from other languages.
+## Reborrows:
+ - [mzabaluev's Reborrows](https://github.com/rust-lang/rfcs/pull/2364)
+ - [Issue on Reborrows](https://github.com/rust-lang/rfcs/issues/1403)
+ 
+## Custom references:
+ - [carbotaniuman's IndexGet and IndexSet](https://github.com/rust-lang/rfcs/pull/2953)
 
-Note that while precedent set by other languages is some motivation, it does not on its own motivate an RFC.
-Please also take into consideration that rust sometimes intentionally diverges from common language features.
+## Inspiration:
+This RFC is largely inspired by python's indexing operator that "just works" with libraries such as Tensorflow.
 
 # Unresolved questions
 [unresolved-questions]: #unresolved-questions
-
-- What parts of the design do you expect to resolve through the RFC process before this gets merged?
-- What parts of the design do you expect to resolve through the implementation of this feature before stabilization?
-- What related issues do you consider out of scope for this RFC that could be addressed in the future independently of the solution that comes out of this RFC?
-
+- What are some actually good names for the traits? What module should they go in?
 - Should more than one ```KnownSize + !Sized``` be allowed in a struct?
+- Should ```&*v``` and ```&mut *v``` be desugared to ```v.reborrow()``` and ```v.reborrow_mut()``` respectively?
+- What exactly happens if you implement ```KnownSize``` for a ```Sized``` type or a trait object? Does it error, do nothing or something else?
+  - What happens if you implement ```KnownSize``` for a struct with a ```?Sized``` generic parameter?
 
 # Future possibilities
 [future-possibilities]: #future-possibilities
@@ -805,15 +782,15 @@ And drop would not be able to access any field with CustomRef's first lifetime p
 Borrow contract specialization is a way to express how long different lifetimes should be borrowed.
 In our case we have a CustomRefMut and we want to "borrow" the lifetime for longer than the actual CustomRefMut.
 ```rust
-// This is not a trait method for readability
-fn reborrow_mut<'a>(reference: &'a mut '_ CustomRefMut<'a>) -> CustomRefMut<'a> {
-    todo!()
+impl<'a> ReborrowMut for CustomRefMut<'a> {
+    type RefMut<'b> = CustomRefMut<'b>;
+    fn reborrow_mut<'c>(&{'_, 'c} mut Self) -> CustomRefMut<'c>;
 }
 ```
-Here the mutable borrow has a lifetime 'a, but we can specify that it doesn't apply to the whole borrow.
+Here the mutable borrow has a lifetime ```'c```, but we can specify that it doesn't apply to the whole borrow.
 ```'_``` means that the borrowed CustomRefMut must exist at least for the duration of this function.
 Specifically, we only need a short borrow of CustomRefMut, but a longer one for the lifetime parameter.
-After reborrow_mut is called, methods that don't use the 'a lifetime parameter can be called, even if they overlap with the 'a lifetime parameter.
+After reborrow_mut is called, methods that don't use the ```'a``` lifetime parameter can be called, even if they overlap with the 'a lifetime parameter.
 For example the reference that was borrowed could be dropped.
 ```rust
 fn bar<'a>(ref: CustomRefMut<'a>) -> CustomRefMut<'a> {
@@ -825,3 +802,5 @@ fn bar<'a>(ref: CustomRefMut<'a>) -> CustomRefMut<'a> {
     reborrowed
 }
 ```
+
+Some previous discussion [here](https://internals.rust-lang.org/t/proposal-about-expired-references/11675)
